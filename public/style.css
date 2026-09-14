@@ -587,6 +587,24 @@ body { font-family: sans-serif; background: var(--bg-color); margin: 0; padding:
   background: rgba(231,76,60,0.1);
 }
 
+.move-btn {
+  background: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: #666;
+  transition: all 0.2s;
+}
+.move-btn:hover:not(:disabled) {
+  background: #e0e0e0;
+  color: #333;
+}
+.move-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 #exportRange option:disabled {
     color:#aaaaaa;
     background:#f7f7f7;

@@ -95,10 +95,13 @@ let roomList = [];
 let empList = [];
 
 // 篩選狀態
-let filterEmployee = "";
+let filterEmployees = [];
 let filterRooms = [];
 function _isRoomFiltered(room) {
     return filterRooms.length > 0 && !filterRooms.includes(room);
+}
+function _isEmployeeFiltered(employee) {
+    return filterEmployees.length > 0 && !filterEmployees.includes(employee);
 }
 
 const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -118,19 +121,26 @@ const ROOM_PALETTE = [
 // 注意：Classroom 1 / Classroom 2 已永久刪除，不再由 server 重新建立；以下兩項僅作為「舊預約」的穩定配色參考
 let roomColorMap = {
   "Classroom 1": { bg: "#4e749220", border: "#4e7492", label: "#4e7492" },
-  "Classroom 2": { bg: "#96793b20", border: "#96793b", label: "#96793b" },
-  "VIP Room":    { bg: "#9e516720", border: "#9e5167", label: "#9e5167" },
-  "EDS":         { bg: "#3f757120", border: "#3f7571", label: "#3f7571" }
+  "Classroom 2": { bg: "#96793b20", border: "#96793b", label: "#96793b" }
 };
 
 // localStorage 使用者自訂配色持久化（僅存使用者手動挑選過的房間）
 const _UC_KEY = 'userColorOverrides';
-function _loadUserOverrides() {
+// 頁面加載時不加載localStorage，等待後端數據加載完成後再處理
+function _loadUserOverrides(backendRoomNames) {
     try {
         const raw = localStorage.getItem(_UC_KEY);
         if (raw) {
             const o = JSON.parse(raw);
-            Object.keys(o).forEach(k => { roomColorMap[k] = o[k]; });
+            // 只對後端沒有顏色數據的房間應用 localStorage 顏色
+            // 後端顏色始終優先於 localStorage
+            Object.keys(o).forEach(k => {
+                const room = roomList.find(r => r.name === k);
+                // 只有當後端沒有該房間，或者後端該房間沒有顏色數據時，才使用 localStorage
+                if (!room || !room.colorData) {
+                    roomColorMap[k] = o[k];
+                }
+            });
         }
     } catch(e) {}
 }
@@ -138,11 +148,71 @@ function _saveUserOverride(roomName) {
     try {
         const raw = localStorage.getItem(_UC_KEY);
         const o = raw ? JSON.parse(raw) : {};
-        o[roomName] = roomColorMap[roomName];
-        localStorage.setItem(_UC_KEY, JSON.stringify(o));
+        // 只有當後端沒有該房間的顏色數據時才保存到 localStorage
+        const room = roomList.find(r => r.name === roomName);
+        if (!room || !room.colorData) {
+            o[roomName] = roomColorMap[roomName];
+            localStorage.setItem(_UC_KEY, JSON.stringify(o));
+        }
     } catch(e) {}
 }
-_loadUserOverrides();
+
+// 頂部「員工」多選篩選下拉選單（全域）
+function buildEmployeeMultiFilter() {
+    const btn = document.getElementById('empFilterBtn');
+    const panel = document.getElementById('empFilterPanel');
+    const listEl = document.getElementById('empFilterList');
+    const allCb = document.getElementById('empFilterAll');
+    if (!btn || !panel || !listEl || !allCb) return;
+
+    // 依 empList 重建員工勾選清單
+    listEl.innerHTML = empList.map(e =>
+        `<label class="multi-option"><input type="checkbox" value="${e.name.replace(/"/g, '&quot;')}">${e.name}</label>`
+    ).join('');
+
+    const labelEl = document.getElementById('empFilterLabel');
+
+    function refresh() {
+        listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            cb.checked = filterEmployees.includes(cb.value);
+        });
+        allCb.checked = filterEmployees.length === 0;
+        labelEl.textContent = filterEmployees.length === 0 ? '全部員工' : `已選 ${filterEmployees.length} 人`;
+        btn.classList.toggle('has-selection', filterEmployees.length > 0);
+    }
+
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        const open = panel.style.display === 'block';
+        panel.style.display = open ? 'none' : 'block';
+    };
+    document.addEventListener('click', (e) => {
+        if (!panel.contains(e.target) && !btn.contains(e.target)) {
+            panel.style.display = 'none';
+        }
+    });
+
+    allCb.onchange = () => {
+        if (allCb.checked) {
+            filterEmployees = [];
+        }
+        refresh();
+        updateView();
+    };
+
+    listEl.addEventListener('change', (e) => {
+        const cb = e.target;
+        if (cb.checked) {
+            if (!filterEmployees.includes(cb.value)) filterEmployees.push(cb.value);
+        } else {
+            filterEmployees = filterEmployees.filter(v => v !== cb.value);
+        }
+        refresh();
+        updateView();
+    });
+
+    refresh();
+}
 
 // 頂部「房間」多選篩選下拉選單（全域）
 function buildRoomMultiFilter() {
@@ -232,24 +302,21 @@ function _refreshRoomMultiFilter() {
     btn.classList.toggle('has-selection', filterRooms.length > 0);
 }
 
-// 隨機生成房間配色函數：先順序取用未使用色，用完才循環
-function generateRandomRoomColor() {
+// 根據房間名稱生成確定性顏色（確保所有電腦顯示相同顏色）
+function generateRandomRoomColor(roomName) {
   const colorPool = ROOM_PALETTE;
-
-  // 取出所有已經被佔用的 border 色
-  const usedColors = Object.values(roomColorMap).map(item => item.border);
-  // 篩選出還沒被使用的顏色
-  const availableColors = colorPool.filter(color => !usedColors.includes(color));
-
-  let border;
-  if (availableColors.length > 0) {
-    // 還有剩餘未使用顏色 → 從剩餘池隨機抽取，保證不重複
-    border = availableColors[Math.floor(Math.random() * availableColors.length)];
-  } else {
-    // 20種全部用完，允許重複，隨機取全部池內顏色
-    border = colorPool[Math.floor(Math.random() * colorPool.length)];
+  
+  // 使用房間名稱的哈希值來確定性地選擇顏色
+  let hash = 0;
+  for (let i = 0; i < roomName.length; i++) {
+    hash = ((hash << 5) - hash) + roomName.charCodeAt(i);
+    hash = hash & hash; // Convert to 32bit integer
   }
-
+  
+  // 使用絕對值確保索引為正數
+  const index = Math.abs(hash) % colorPool.length;
+  const border = colorPool[index];
+  
   const bg = border + "20";
   return {
     bg,
@@ -262,17 +329,9 @@ function generateRandomRoomColor() {
 function getRoomStyle(roomName) {
     // 用戶自訂 / 已持久化的配色優先（含色彩選擇器修改過的顏色）
     if (roomColorMap[roomName]) return roomColorMap[roomName];
-    // 內建房間初始預設（僅在 roomColorMap 尚無此房間時生效）
-    const builtInRooms = {
-        "VIP Room":    { bg: "#9e516720", border: "#9e5167", label: "#9e5167" },
-        "EDS":         { bg: "#3f757120", border: "#3f7571", label: "#3f7571" }
-    };
-    if(builtInRooms[roomName]){
-        return builtInRooms[roomName];
-    }
 
     if (!roomColorMap[roomName]) {
-        const color = generateRandomRoomColor();
+        const color = generateRandomRoomColor(roomName);
         roomColorMap[roomName] = color;
         // 持久化到後端，確保刷新後顏色不變
         const room = roomList.find(r => r.name === roomName);
@@ -565,23 +624,9 @@ async function loadAllData() {
                     try { roomColorMap[r.name] = JSON.parse(r.colorData); } catch(e) {}
                 }
             });
-            // 遷移：舊版高飽和色系一律重配成柔和低飽和色系，並持久化（內建房間由 getRoomStyle 覆蓋，不在此處理）
-            const paletteSet = new Set(ROOM_PALETTE.map(c => c.toLowerCase()));
-            const builtInNames = ['VIP Room', 'EDS'];
-            roomList.forEach(r => {
-                if (!r.colorData || builtInNames.includes(r.name)) return;
-                let c; try { c = JSON.parse(r.colorData); } catch(e) { return; }
-                if (!c || !c.border || paletteSet.has(String(c.border).toLowerCase())) return;
-                const color = generateRandomRoomColor();
-                roomColorMap[r.name] = color;
-                if (r.id) fetch(`${API_BASE}/rooms/${r.id}/color`, {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ colorData: JSON.stringify(color) })
-                }).catch(() => {});
-            });
-            // API sync 完成後，重新套用使用者自訂配色（確保使用者手動挑選的顏色不被遷移覆蓋）
-            _loadUserOverrides();
+            // API sync 完成後，重新套用使用者自訂配色（只對後端沒有的房間）
+            const backendRoomNames = roomList.map(r => r.name);
+            _loadUserOverrides(backendRoomNames);
         }
 
         // 載入回收站（is_deleted=1 的房間）
@@ -614,27 +659,14 @@ async function loadAllData() {
 
 // 初始化篩選下拉選單
 function initFilterDropdowns() {
-    const filterEmp = document.getElementById('filterEmployee');
-    if (filterEmp) {
-        filterEmp.innerHTML = '<option value="">全部員工</option>';
-        empList.forEach(emp => {
-            const opt = document.createElement('option');
-            opt.value = emp.name;
-            opt.textContent = emp.name;
-            filterEmp.appendChild(opt);
-        });
-        filterEmp.onchange = (e) => {
-            filterEmployee = e.target.value;
-            updateView();
-        };
-    }
+    buildEmployeeMultiFilter();
     buildRoomMultiFilter();
 }
 
 // 取得篩選後的事件列表
 function getFilteredData() {
     return eventsData.filter(ev => {
-        if (filterEmployee && ev.employee !== filterEmployee) return false;
+        if (_isEmployeeFiltered(ev.employee)) return false;
         if (_isRoomFiltered(ev.room)) return false;
         return true;
     });
@@ -900,7 +932,7 @@ function getFilteredData() {
                         }
                     }
             }
-            for (const rName of allNewRooms) { try { const color = generateRandomRoomColor(); await fetch(`${API_BASE}/rooms`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({name:rName,short:'',colorData:JSON.stringify(color)}) }); } catch(e) {} }
+            for (const rName of allNewRooms) { try { const color = generateRandomRoomColor(rName); await fetch(`${API_BASE}/rooms`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({name:rName,short:'',colorData:JSON.stringify(color)}) }); } catch(e) {} }
             for (const eName of allNewEmps) { try { await fetch(`${API_BASE}/employees`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({name:eName}) }); } catch(e) {} }
 
             await loadAllData();
@@ -1116,8 +1148,15 @@ roomList.forEach((roomItem, idx) => {
     const div = document.createElement('div');
     div.className = 'list-item';
     div.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;">
+            <button data-type="move-up" data-idx="${idx}" class="move-btn" title="上移" ${idx === 0 ? 'disabled' : ''}><i class="fa-solid fa-chevron-up"></i></button>
+            <button data-type="move-down" data-idx="${idx}" class="move-btn" title="下移" ${idx === roomList.length - 1 ? 'disabled' : ''}><i class="fa-solid fa-chevron-down"></i></button>
+        </div>
         <div style="display:flex;flex-direction:column;gap:4px;flex:1;">
-            <span>全名：${roomItem.name}</span>
+            <div style="display:flex;align-items:center;gap:6px;">
+                <label style="font-size:13px;">全名：</label>
+                <input class="name-input" data-idx="${idx}" value="${roomItem.name}" style="padding:4px;flex:1;">
+            </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <label style="font-size:13px;">縮寫：</label>
                 <input class="short-input" data-idx="${idx}" value="${roomItem.short || ''}" style="padding:4px;flex:1;">
@@ -1127,11 +1166,45 @@ roomList.forEach((roomItem, idx) => {
     `;
     roomListWrap.appendChild(div);
 });
-// 綁定縮寫輸入框自動存儲
-document.querySelectorAll('.short-input').forEach(input=>{
-    input.onblur = async function(){
-        const idx = Number(this.dataset.idx);
-        const newShort = this.value.trim();
+
+// 綁定房間名稱和縮寫輸入框自動存儲（使用事件委託）
+roomListWrap.addEventListener('blur', async function(e) {
+    if (e.target.classList.contains('name-input')) {
+        const input = e.target;
+        const idx = Number(input.dataset.idx);
+        const newName = input.value.trim();
+        if (!newName) {
+            alert("房間名稱不可空白");
+            input.value = roomList[idx].name;
+            return;
+        }
+        if (newName === roomList[idx].name) return;
+        
+        try {
+            const res = await fetch(`${API_BASE}/rooms/${roomList[idx].id}/name`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: newName })
+            });
+            const result = await res.json();
+            if (!result.ok) {
+                alert(result.msg);
+                input.value = roomList[idx].name;
+                return;
+            }
+            roomList[idx].name = newName;
+            await loadAllData();
+            renderSettingLists();
+            updateView();
+        } catch(e) { 
+            console.error("房間名稱更新失敗:", e); 
+            alert("房間名稱更新失敗");
+            input.value = roomList[idx].name;
+        }
+    } else if (e.target.classList.contains('short-input')) {
+        const input = e.target;
+        const idx = Number(input.dataset.idx);
+        const newShort = input.value.trim();
         roomList[idx].short = newShort;
         try {
             await fetch(`${API_BASE}/rooms/${roomList[idx].id}/short`, {
@@ -1142,7 +1215,86 @@ document.querySelectorAll('.short-input').forEach(input=>{
         } catch(e) { console.error("縮寫更新失敗:", e); }
         updateView();
     }
-})
+}, true);
+
+// 綁定上移/下移按鈕（使用事件委託）
+roomListWrap.addEventListener('click', async function(e) {
+    const btn = e.target.closest('.move-btn');
+    if (!btn) return;
+    if (!clickGuard(btn)) return;
+    
+    const type = btn.dataset.type;
+    const idx = Number(btn.dataset.idx);
+    
+    let success = false;
+    if (type === 'move-up' && idx > 0) {
+        // 交換位置
+        [roomList[idx], roomList[idx - 1]] = [roomList[idx - 1], roomList[idx]];
+        success = await saveRoomOrder();
+    } else if (type === 'move-down' && idx < roomList.length - 1) {
+        // 交換位置
+        [roomList[idx], roomList[idx + 1]] = [roomList[idx + 1], roomList[idx]];
+        success = await saveRoomOrder();
+    }
+    
+    if (success) {
+        // 重新加載房間列表以確保與後端同步
+        await loadRooms();
+        renderSettingLists();
+        updateView();
+    } else {
+        // 失敗時恢復原始順序
+        if (type === 'move-up' && idx > 0) {
+            [roomList[idx], roomList[idx - 1]] = [roomList[idx - 1], roomList[idx]];
+        } else if (type === 'move-down' && idx < roomList.length - 1) {
+            [roomList[idx], roomList[idx + 1]] = [roomList[idx + 1], roomList[idx]];
+        }
+        alert('更新房間順序失敗，請重試');
+    }
+});
+
+// 保存房間排序到後端
+async function saveRoomOrder() {
+    try {
+        const roomIds = roomList.map(r => r.id);
+        const res = await fetch(`${API_BASE}/rooms/reorder`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomIds })
+        });
+        const result = await res.json();
+        if (!result.ok) {
+            console.error('保存房間排序失敗:', result.msg);
+            return false;
+        }
+        return true;
+    } catch (err) {
+        console.error('保存房間排序失敗:', err);
+        return false;
+    }
+}
+
+// 重新加載房間列表
+async function loadRooms() {
+    try {
+        const roomRes = await fetch(`${API_BASE}/rooms`);
+        const roomJson = await roomRes.json();
+        if (roomJson.ok) {
+            roomList = roomJson.data;
+            // 同步 roomColorMap
+            roomList.forEach(r => {
+                if (r.colorData) {
+                    try { roomColorMap[r.name] = JSON.parse(r.colorData); } catch(e) {}
+                }
+            });
+            return true;
+        }
+        return false;
+    } catch (err) {
+        console.error('加載房間列表失敗:', err);
+        return false;
+    }
+}
 
     // --- 員工列表 ---
     empListWrap.innerHTML = "";
@@ -1293,7 +1445,7 @@ document.querySelectorAll('.short-input').forEach(input=>{
     const val = newRoomInput.value.trim();
     if(!val) return alert("請輸入房間名稱");
     try {
-        const color = generateRandomRoomColor();
+        const color = generateRandomRoomColor(val);
         const res = await fetch(`${API_BASE}/rooms`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1862,7 +2014,7 @@ function renderMonthView() {
             const isOnStartDate = ev.date === dateStr;
             const isOnEndDate = evEndDate === dateStr && evEndDate !== ev.date;
             if (!isOnStartDate && !isOnEndDate) return;
-            if (filterEmployee && ev.employee !== filterEmployee) return;
+            if (_isEmployeeFiltered(ev.employee)) return;
             if (_isRoomFiltered(ev.room)) return;
             if (isMobile) {
                 dots.push({ color: getRoomStyle(ev.room).label, title: ev.name });
@@ -1871,13 +2023,13 @@ function renderMonthView() {
             const style = getRoomStyle(ev.room);
             const dispRoom = getCompactRoomText(ev.room);
             const prefix = isOnEndDate ? '[跨日] ' : '';
-            html += `<div class="event-label" data-idx="${index}" style="background-color:${style.label};color:#fff;font-size:11px;line-height:1.3;padding:2px 4px;border-radius:3px;margin:1px 0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;width:100%;box-sizing:border-box;cursor:pointer;"><strong>${ev.startTime}-${ev.endTime}</strong> ${prefix}${ev.name} · ${dispRoom}</div>`;
+            html += `<div class="event-label" data-idx="${index}" style="background-color:${style.label};color:#fff;font-size:11px;line-height:1.3;padding:2px 4px;border-radius:3px;margin:1px 0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;width:100%;box-sizing:border-box;cursor:pointer;">${dispRoom} <strong>${ev.startTime}-${ev.endTime}</strong> ${prefix}${ev.name}</div>`;
         });
 
         // todos
         todosData.forEach((todo) => {
             if (todo.startDate <= dateStr && todo.endDate >= dateStr) {
-                if (filterEmployee && todo.employee !== filterEmployee) return;
+                if (_isEmployeeFiltered(todo.employee)) return;
                 if (_isRoomFiltered(todo.room)) return;
                 if (isMobile) {
                     dots.push({ color: '#f9a825', title: todo.title });
@@ -1894,7 +2046,7 @@ function renderMonthView() {
         // leaves
         const dayLeaves = getLeavesForDate(dateStr);
         dayLeaves.forEach(leave => {
-            if (filterEmployee && leave.employee !== filterEmployee) return;
+            if (_isEmployeeFiltered(leave.employee)) return;
             if (isMobile) {
                 dots.push({ color: '#4caf50', title: leave.employee + (leave.leaveType ? ' (' + leave.leaveType + ')' : '') });
                 return;
@@ -2015,12 +2167,12 @@ function createDayColumn(dateStr) {
 
 function getDayExtrasHtml(dateStr) {
     const dayTodos = (todosData || []).filter(todo => {
-        if (filterEmployee && todo.employee !== filterEmployee) return false;
+        if (_isEmployeeFiltered(todo.employee)) return false;
         if (_isRoomFiltered(todo.room)) return false;
         return todo.startDate <= dateStr && todo.endDate >= dateStr;
     });
     const dayLeaves = getLeavesForDate ? getLeavesForDate(dateStr).filter(l => {
-        if (filterEmployee && l.employee !== filterEmployee) return false;
+        if (_isEmployeeFiltered(l.employee)) return false;
         return true;
     }) : [];
     if (dayTodos.length === 0 && dayLeaves.length === 0) return '';
@@ -2043,7 +2195,7 @@ function renderEventsIntoColumn(columnElement, dateStr) {
         const isOnStart = ev.date === dateStr;
         const isOnEnd = ev.endDate && ev.endDate === dateStr && ev.endDate !== ev.date;
         if (!isOnStart && !isOnEnd) return false;
-        if (filterEmployee && ev.employee !== filterEmployee) return false;
+        if (_isEmployeeFiltered(ev.employee)) return false;
         if (_isRoomFiltered(ev.room)) return false;
         return true;
     });
@@ -2278,6 +2430,30 @@ function openBookingForm(dateStr, index = -1) {
     const roomSelect = document.getElementById('roomSelect');
     roomSelect.innerHTML = "";
 
+    // 動態添加日期選擇器（如果不存在）
+    let dateInput = document.getElementById('eventDate');
+    if (!dateInput) {
+        const formBody = document.querySelector('.add-event-body');
+        const dateGroup = document.createElement('div');
+        dateGroup.className = 'input-group';
+        dateGroup.innerHTML = '<label>日期</label><input type="date" id="eventDate" />';
+        formBody.insertBefore(dateGroup, formBody.firstChild);
+        dateInput = document.getElementById('eventDate');
+    }
+    // 設置日期輸入框的值
+    dateInput.value = dateStr;
+    
+    // 動態添加結束日期選擇器（如果不存在）
+    let endDateInput = document.getElementById('eventEndDate');
+    if (!endDateInput) {
+        const formBody = document.querySelector('.add-event-body');
+        endDateInput = document.getElementById('eventEndDate');
+    }
+    // 設置結束日期輸入框的值
+    if (endDateInput) {
+        endDateInput.value = '';
+    }
+
     // 動態渲染房間下拉選項
     roomList.forEach(roomItem => {
         const opt = document.createElement('option');
@@ -2419,6 +2595,14 @@ function openBookingForm(dateStr, index = -1) {
         setSelectValue(document.getElementById("startTime"), ev.startTime);
         setSelectValue(document.getElementById("endTime"), ev.endTime);
         document.getElementById("eventNote").value = ev.note || '';
+        
+        // 設置結束日期
+        const endDateInput = document.getElementById('eventEndDate');
+        if (endDateInput && ev.endDate && ev.endDate !== ev.date) {
+            endDateInput.value = ev.endDate;
+        } else if (endDateInput) {
+            endDateInput.value = '';
+        }
 
         // 回填房間下拉
         const optMatch = Array.from(roomSelect.options).find(o => o.value === ev.room);
@@ -2508,9 +2692,13 @@ bookBtn.onclick = async (e) => {
     const room = cleanStr(roomRaw);
     const startTime = cleanTime(startTimeRaw);
     const endTime = cleanTime(endTimeRaw);
-    const date = cleanStr(selectedDateStr);
+    // 使用日期輸入框的值，讓用戶可以修改日期
+    const dateInput = document.getElementById('eventDate');
+    const endDateInput = document.getElementById('eventEndDate');
+    const date = dateInput ? cleanStr(dateInput.value) : cleanStr(selectedDateStr);
+    const endDateRaw = endDateInput ? cleanStr(endDateInput.value) : '';
     const note = document.getElementById("eventNote").value.trim();
-    console.log("[BOOK] cleaned:", {name, employee, room, startTime, endTime, date});
+    console.log("[BOOK] cleaned:", {name, employee, room, startTime, endTime, date, endDateRaw});
 
     // 3. 基礎空值攔截
     if (!name || !employee || !room) { console.log("[BOOK] BLOCKED: empty fields"); return alert("活動名稱、員工、房間不能空白"); }
@@ -2525,9 +2713,16 @@ bookBtn.onclick = async (e) => {
         return alert("日期格式非法");
     }
 
-    // 跨日預約：結束時間早於開始時間 → 隔日結束
+    // 處理結束日期
     let endDate = date;
-    if (startTime >= endTime) {
+    if (endDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(endDateRaw)) {
+        // 用戶明確指定了結束日期
+        if (endDateRaw < date) {
+            return alert("結束日期不能早於開始日期");
+        }
+        endDate = endDateRaw;
+    } else if (startTime >= endTime) {
+        // 跨日預約：結束時間早於開始時間 → 隔日結束
         const nextDay = new Date(date + 'T00:00:00');
         nextDay.setDate(nextDay.getDate() + 1);
         endDate = getFormattedDate(nextDay);
@@ -2646,7 +2841,7 @@ function getFilterEvents(range){
         if (inRange(leave.leaveDate)) list.push({ ...leave, _type: 'leave', name: leave.employee + ' 休假' + (leave.leaveType ? '(' + leave.leaveType + ')' : ''), employee: leave.employee, date: leave.leaveDate, startTime: '', endTime: '' });
     });
     // 套用員工/房間篩選
-    if (filterEmployee) list = list.filter(ev => ev.employee === filterEmployee);
+    if (filterEmployees.length) list = list.filter(ev => filterEmployees.includes(ev.employee));
     if (filterRooms.length) list = list.filter(ev => filterRooms.includes(ev.room));
     list.sort((a,b)=>{
         const d1 = a.date + " " + a.startTime;
@@ -2737,7 +2932,7 @@ function getFilteredTodos(range){
         const we = getFormattedDate(endOfWeek);
         list = list.filter(t => t.startDate <= we && t.endDate >= ws);
     }
-    if(filterEmployee) list = list.filter(t => t.employee === filterEmployee);
+    if(filterEmployees.length) list = list.filter(t => filterEmployees.includes(t.employee));
     if(filterRooms.length) list = list.filter(t => filterRooms.includes(t.room));
     return list;
 }
@@ -2790,7 +2985,7 @@ function getFilteredLeaves(range){
         const we = getFormattedDate(endOfWeek);
         list = list.filter(l => l.leaveDate <= we && (l.endDate || l.leaveDate) >= ws);
     }
-    if(filterEmployee) list = list.filter(l => l.employee === filterEmployee);
+    if(filterEmployees.length) list = list.filter(l => filterEmployees.includes(l.employee));
     return list;
 }
 
@@ -2874,12 +3069,12 @@ async function exportPdf(range){
         const pageH = doc.internal.pageSize.getHeight();
         const monthsEN = ["January","February","March","April","May","June","July","August","September","October","November","December"];
         const colW = pageW / 7;
-        const headerH = 8;
-        const titleH = 10;
+        const headerH = 10;
+        const titleH = 15;
         const margin = 4;
         const weekdays = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-        const itemFont = 7;
-        const lineH = 3.6;
+        const itemFont = 8;
+        const lineH = 4;
         const availH = pageH - margin * 2 - titleH - headerH;
 
         // 每個日期格：與月曆 UI 一致的涵蓋判定（跨日/區間都算），換行後全數列出
@@ -2949,19 +3144,19 @@ async function exportPdf(range){
                     if(holiday) items.push({ kind: 'holiday', text: holiday.name });
                     (eventsData || []).forEach(ev => {
                         if (ev.date !== dateStr) return;
-                        if (filterEmployee && ev.employee !== filterEmployee) return;
+                        if (_isEmployeeFiltered(ev.employee)) return;
                         if (_isRoomFiltered(ev.room)) return;
                         items.push({ kind: 'event', text: `${ev.startTime} ${ev.name} - ${ev.room}`, room: ev.room });
                     });
                     (todosData || []).forEach(todo => {
-                        if (filterEmployee && todo.employee !== filterEmployee) return;
+                        if (_isEmployeeFiltered(todo.employee)) return;
                         if (_isRoomFiltered(todo.room)) return;
                         if (todo.startDate <= dateStr && todo.endDate >= dateStr) {
                             items.push({ kind: 'todo', text: (todo.startTime || '') + ' ' + todo.title });
                         }
                     });
                     (leavesData || []).forEach(leave => {
-                        if (filterEmployee && leave.employee !== filterEmployee) return;
+                        if (_isEmployeeFiltered(leave.employee)) return;
                         if (leave.leaveDate <= dateStr && (leave.endDate || leave.leaveDate) >= dateStr) {
                             items.push({ kind: 'leave', text: leave.employee + ' 休假' + (leave.leaveType ? '(' + leave.leaveType + ')' : '') });
                         }
@@ -3023,9 +3218,11 @@ async function exportPdf(range){
 
             pageRows.forEach((rowIndexes, pi) => {
                 if(pi > 0) doc.addPage();
-                doc.setFontSize(16);
+                doc.setFontSize(20);
+                doc.setFont(undefined, 'bold');
                 doc.setTextColor(51);
-                doc.text(`${monthsEN[m]} ${targetYear}`, pageW / 2, margin + 7, { align: 'center' });
+                doc.text(`${monthsEN[m]} ${targetYear}`, pageW / 2, margin + 10, { align: 'center' });
+                doc.setFont(undefined, 'normal');
                 doc.setDrawColor(74, 144, 226);
                 doc.setLineWidth(0.5);
                 doc.line(margin, margin + titleH - 2, pageW - margin, margin + titleH - 2);
@@ -3092,14 +3289,14 @@ async function exportPdf(range){
         const allDayItemsByDay = weekDates.map(dateStr => {
             const items = [];
             (todosData || []).forEach(todo => {
-                if (filterEmployee && todo.employee !== filterEmployee) return;
+                if (_isEmployeeFiltered(todo.employee)) return;
                 if (_isRoomFiltered(todo.room)) return;
                 if (todo.startDate <= dateStr && todo.endDate >= dateStr) {
                     items.push({ _type: 'todo', name: todo.title, startTime: todo.startTime || '' });
                 }
             });
             (leavesData || []).forEach(leave => {
-                if (filterEmployee && leave.employee !== filterEmployee) return;
+                if (_isEmployeeFiltered(leave.employee)) return;
                 if (leave.leaveDate <= dateStr && (leave.endDate || leave.leaveDate) >= dateStr) {
                     items.push({ _type: 'leave', name: leave.employee + ' 休假' + (leave.leaveType ? '(' + leave.leaveType + ')' : ''), startTime: '' });
                 }
@@ -3616,16 +3813,40 @@ if (colorPickerConfirm) {
         const hex = '#' + document.getElementById('pickerHexInput').value.replace('#', '');
         if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return;
         const newColor = { bg: hex + '20', border: hex, label: hex };
-        roomColorMap[roomName] = newColor;
-        _saveUserOverride(roomName);
+        
         const room = roomList.find(r => r.name === roomName);
         if (room && room.id) {
-            fetch(`${API_BASE}/rooms/${room.id}/color`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ colorData: JSON.stringify(newColor) })
-            }).catch(() => {});
+            try {
+                const res = await fetch(`${API_BASE}/rooms/${room.id}/color`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ colorData: JSON.stringify(newColor) })
+                });
+                const result = await res.json();
+                if (!result.ok) {
+                    alert('更新顏色失敗：' + result.msg);
+                    return;
+                }
+                // 後端更新成功後才更新本地顯示
+                roomColorMap[roomName] = newColor;
+                // 清除 localStorage 中的舊顏色，確保後端顏色優先
+                try {
+                    const raw = localStorage.getItem(_UC_KEY);
+                    if (raw) {
+                        const o = JSON.parse(raw);
+                        delete o[roomName];
+                        localStorage.setItem(_UC_KEY, JSON.stringify(o));
+                    }
+                } catch(e) {}
+            } catch (err) {
+                alert('更新顏色失敗：網絡錯誤');
+                return;
+            }
+        } else {
+            // 如果房間沒有ID（臨時房間），只更新本地
+            roomColorMap[roomName] = newColor;
         }
+        
         document.getElementById('colorPickerModal').classList.remove('active');
         renderRoomChips();
         updateView();
@@ -3799,13 +4020,28 @@ function renderTodos() {
     const wrap = document.getElementById('todoListWrap');
     if (!wrap) return;
     wrap.innerHTML = '';
-    if (todosData.length === 0) {
+    
+    // 過濾掉員工假期期間的待辦事項
+    const filteredTodos = todosData.filter(todo => {
+        if (!todo.employee) return true;
+        // 檢查該員工在待辦事項日期範圍內是否有假期
+        const hasLeave = leavesData.some(leave => {
+            if (leave.employee !== todo.employee) return false;
+            const leaveStart = leave.leaveDate;
+            const leaveEnd = leave.endDate || leave.leaveDate;
+            // 檢查待辦事項日期範圍與假期日期範圍是否有重疊
+            return todo.startDate <= leaveEnd && todo.endDate >= leaveStart;
+        });
+        return !hasLeave;
+    });
+    
+    if (filteredTodos.length === 0) {
         wrap.innerHTML = '<div style="color:#888;text-align:center;padding:12px;">暫無待辦事項</div>';
         return;
     }
     // Group by title+startTime+endTime+room+employee+isAllDay
     const groups = {};
-    todosData.forEach(todo => {
+    filteredTodos.forEach(todo => {
         const key = [todo.title, todo.startTime||'', todo.endTime||'', todo.room||'', todo.employee||'', todo.isAllDay?'1':'0'].join('|');
         if (!groups[key]) groups[key] = [];
         groups[key].push(todo);
@@ -3977,18 +4213,34 @@ function editTodoItem(todo) {
             const finalEndDate = endDate || leaveDate;
             if (finalEndDate < leaveDate) return alert('結束日期不能早於開始日期');
             try {
-                const res = await fetch(`${API_BASE}/employee-leaves`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ employee, leaveDate, endDate: finalEndDate, leaveType })
-                });
+                let res;
+                if (currentEditingLeaveId) {
+                    // 編輯模式
+                    res = await fetch(`${API_BASE}/employee-leaves/${currentEditingLeaveId}`, {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ employee, leaveDate, endDate: finalEndDate, leaveType })
+                    });
+                } else {
+                    // 新增模式
+                    res = await fetch(`${API_BASE}/employee-leaves`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ employee, leaveDate, endDate: finalEndDate, leaveType })
+                    });
+                }
                 const json = await res.json();
                 if (!json.ok) return alert(json.msg);
+                
+                // 重置表單
+                currentEditingLeaveId = null;
+                document.getElementById('leaveEmployee').value = '';
                 document.getElementById('leaveStartDate').value = getTodayStr();
                 document.getElementById('leaveEndDate').value = getTodayStr();
                 document.getElementById('leaveStartDate').dataset.prev = getTodayStr();
                 document.getElementById('leaveType').value = '';
+                addLeaveBtn.textContent = '新增員工假期';
+                
                 await loadLeaves(); if (window._renderLeaves) window._renderLeaves(); updateView();
-            } catch (err) { alert('新增失敗：' + err.message); }
+            } catch (err) { alert(currentEditingLeaveId ? '更新失敗：' : '新增失敗：' + err.message); }
         };
     }
 
@@ -4047,10 +4299,68 @@ function showLeaveDetail(leave) {
     };
     document.getElementById('btnEditTodoDetail').onclick = () => {
         modal.classList.remove("active");
+        // 打開假期表單並填充數據進行編輯
+        openLeaveForm(leave);
     };
     document.getElementById('btnCloseTodoDetail').onclick = () => modal.classList.remove("active");
     modal.onclick = (e) => { if (e.target === modal) modal.classList.remove("active"); };
     modal.classList.add("active");
+}
+
+// 打開假期表單（支持新增和編輯模式）
+let currentEditingLeaveId = null;
+function openLeaveForm(leave = null) {
+    const todosModal = document.getElementById('todosModal');
+    const addLeaveBtn = document.getElementById('addLeaveBtn');
+    
+    // 切換到假期 tab
+    document.querySelectorAll('.todo-tab').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.tab === 'leaves') {
+            btn.classList.add('active');
+            btn.style.color = 'var(--primary-color)';
+            btn.style.borderBottom = '2px solid var(--primary-color)';
+        } else {
+            btn.style.color = '#888';
+            btn.style.borderBottom = '2px solid transparent';
+        }
+    });
+    document.getElementById('tabTodos').style.display = 'none';
+    document.getElementById('tabLeaves').style.display = 'block';
+    
+    // 確保員工下拉選單已填充
+    if (window._populateLeaveEmployeeDropdown) {
+        window._populateLeaveEmployeeDropdown();
+    }
+    
+    if (leave) {
+        // 編輯模式：填充數據
+        currentEditingLeaveId = leave.id;
+        const empSelect = document.getElementById('leaveEmployee');
+        // 確保員工在下拉選單中存在
+        if (!Array.from(empSelect.options).some(o => o.value === leave.employee)) {
+            const opt = document.createElement('option');
+            opt.value = leave.employee;
+            opt.textContent = leave.employee;
+            empSelect.appendChild(opt);
+        }
+        empSelect.value = leave.employee;
+        document.getElementById('leaveStartDate').value = leave.leaveDate;
+        document.getElementById('leaveEndDate').value = leave.endDate || leave.leaveDate;
+        document.getElementById('leaveType').value = leave.leaveType || '';
+        addLeaveBtn.textContent = '更新員工假期';
+    } else {
+        // 新增模式：清空表單
+        currentEditingLeaveId = null;
+        document.getElementById('leaveEmployee').value = '';
+        document.getElementById('leaveStartDate').value = getTodayStr();
+        document.getElementById('leaveEndDate').value = getTodayStr();
+        document.getElementById('leaveStartDate').dataset.prev = getTodayStr();
+        document.getElementById('leaveType').value = '';
+        addLeaveBtn.textContent = '新增員工假期';
+    }
+    
+    todosModal.classList.add('active');
 }
 
 // ====== 側欄收合 ======

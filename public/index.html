@@ -124,17 +124,24 @@
     <button id="nextbtn">&#8594;</button>
     <button id="thisMonthBtn" class="this-month-btn" title="回到本月">本月</button>
 
-    
+
     <select id="viewSelect" class="view-select">
       <option value="month">Month</option>
       <option value="week">Week</option>
       <option value="day">Day</option>
     </select>
 
-    <!-- 篩選下拉選單 -->
-    <select id="filterEmployee" class="filter-select" title="按員工篩選">
-      <option value="">全部員工</option>
-    </select>
+    <!-- 員工多選篩選 -->
+    <div class="multi-select" id="empFilterMulti">
+      <button type="button" class="filter-select multi-select-btn" id="empFilterBtn" title="按員工篩選（可多選）">
+        <span id="empFilterLabel">全部員工</span>
+        <i class="fa-solid fa-chevron-down" style="font-size:10px;margin-left:6px;"></i>
+      </button>
+      <div class="multi-select-panel" id="empFilterPanel" style="display:none;">
+        <label class="multi-option multi-option-all"><input type="checkbox" id="empFilterAll" checked>全部</label>
+        <div id="empFilterList"></div>
+      </div>
+    </div>
     <!-- 房間多選篩選 -->
     <div class="multi-select" id="roomFilterMulti">
       <button type="button" class="filter-select multi-select-btn" id="roomFilterBtn" title="按房間篩選（可多選）">
@@ -224,7 +231,7 @@
 
     <div id="timelineView" class="timeline-container" style="display: none;">
     <div id="weekHeader" class="week-header">
-        <div class="time-gutter"></div> 
+        <div class="time-gutter"></div>
         <div class="week-col-label">Sun</div>
         <div class="week-col-label">Mon</div>
         <div class="week-col-label">Tue</div>
@@ -367,17 +374,24 @@
     </div>
     </div>
     <div class="add-event-body">
-      <div class="input-group">
+        <div class="input-row">
+            <div class="input-group">
+                <label>開始日期</label>
+                <input type="date" id="eventDate" />
+            </div>
+            <div class="input-group">
+                <label>結束日期（選填，跨日預約）</label>
+                <input type="date" id="eventEndDate" />
+            </div>
+        </div>
+        <div class="input-group">
         <label>活動名稱</label>
         <input type="text" id="eventTitle" placeholder="例如：AI 訓練" />
       </div>
       <div class="input-group">
         <label>員工姓名</label>
         <select id="employeeName">
-          <option>Pius</option>
-          <option>Natalie</option>
-          <option>Erle</option>
-          <option>Ivy</option>
+          <option value="">請選擇員工</option>
         </select>
         <!-- 自訂員工輸入框，預設隱藏 -->
         <input type="text" id="customEmpInput" placeholder="輸入自訂員工名稱" style="display:none;margin-top:6px;padding:8px;width:100%;">

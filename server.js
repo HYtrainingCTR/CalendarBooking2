@@ -53,8 +53,9 @@ async function initDB() {
     )`);
     await query(`CREATE TABLE IF NOT EXISTS rooms (
         id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, short_name TEXT DEFAULT '',
-        color_data TEXT DEFAULT '', is_deleted INTEGER DEFAULT 0, create_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        color_data TEXT DEFAULT '', is_deleted INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, create_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`);
+    await query(`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`);
     await query(`CREATE TABLE IF NOT EXISTS reservations (
         id SERIAL PRIMARY KEY, res_date TEXT NOT NULL, title TEXT NOT NULL,
         employee TEXT NOT NULL, room_name TEXT NOT NULL, start_time TEXT NOT NULL,
@@ -262,17 +263,37 @@ app.delete('/api/reservations/:id', async (req, res) => {
 
 // === Rooms ===
 app.get('/api/rooms', async (req, res) => {
-    try { const r = await query(`SELECT id,name,short_name as short,color_data as "colorData" FROM rooms WHERE is_deleted=0 ORDER BY name`); res.json({ ok: true, data: r.rows }); }
+    try { const r = await query(`SELECT id,name,short_name as short,color_data as "colorData",sort_order FROM rooms WHERE is_deleted=0 ORDER BY sort_order,name`); res.json({ ok: true, data: r.rows }); }
     catch (err) { res.json({ ok: false, msg: err.message }); }
 });
 app.get('/api/rooms/all', async (req, res) => {
-    try { const r = await query(`SELECT id,name,short_name as short,color_data as "colorData",is_deleted FROM rooms ORDER BY is_deleted,name`); res.json({ ok: true, data: r.rows }); }
+    try { const r = await query(`SELECT id,name,short_name as short,color_data as "colorData",is_deleted,sort_order FROM rooms ORDER BY is_deleted,sort_order,name`); res.json({ ok: true, data: r.rows }); }
     catch (err) { res.json({ ok: false, msg: err.message }); }
 });
 app.post('/api/rooms', async (req, res) => {
     const { name, short, colorData } = req.body;
     if (!name) return res.json({ ok: false, msg: "房間名稱不可空白" });
-    try { const r = await query(`INSERT INTO rooms (name,short_name,color_data) VALUES ($1,$2,$3) RETURNING id,name`, [name, short||'', colorData||'']); await logOp('CREATE_ROOM',null,`新增房間: ${name}`,req.ip); res.json({ ok: true, data: { id: r.rows[0].id, name: r.rows[0].name, short: short||'', colorData: colorData||'' } }); }
+    try {
+        // 獲取當前最大 sort_order
+        const maxOrder = await query(`SELECT COALESCE(MAX(sort_order), 0) as max_order FROM rooms WHERE is_deleted=0`);
+        const nextOrder = (maxOrder.rows[0].max_order || 0) + 1;
+        const r = await query(`INSERT INTO rooms (name,short_name,color_data,sort_order) VALUES ($1,$2,$3,$4) RETURNING id,name`, [name, short||'', colorData||'', nextOrder]);
+        await logOp('CREATE_ROOM',null,`新增房間: ${name}`,req.ip);
+        res.json({ ok: true, data: { id: r.rows[0].id, name: r.rows[0].name, short: short||'', colorData: colorData||'', sortOrder: nextOrder } });
+    }
+    catch (err) { if (err.message.includes('unique')) return res.json({ ok: false, msg: "房間名稱已存在" }); res.json({ ok: false, msg: err.message }); }
+});
+app.put('/api/rooms/:id/name', async (req, res) => {
+    const { name } = req.body;
+    if (!name) return res.json({ ok: false, msg: "房間名稱不可空白" });
+    try {
+        const check = await query(`SELECT name FROM rooms WHERE id=$1`, [req.params.id]);
+        if (check.rows.length === 0) return res.json({ ok: false, msg: "找不到房間" });
+        const oldName = check.rows[0].name;
+        await query(`UPDATE rooms SET name=$1 WHERE id=$2`, [name, req.params.id]);
+        await logOp('UPDATE_ROOM_NAME', req.params.id, `更新房間名稱: ${oldName} -> ${name}`, req.ip);
+        res.json({ ok: true });
+    }
     catch (err) { if (err.message.includes('unique')) return res.json({ ok: false, msg: "房間名稱已存在" }); res.json({ ok: false, msg: err.message }); }
 });
 app.put('/api/rooms/:id/short', async (req, res) => {
@@ -282,6 +303,26 @@ app.put('/api/rooms/:id/short', async (req, res) => {
 app.put('/api/rooms/:id/color', async (req, res) => {
     try { await query(`UPDATE rooms SET color_data=$1 WHERE id=$2`, [req.body.colorData||'', req.params.id]); res.json({ ok: true }); }
     catch (err) { res.json({ ok: false, msg: err.message }); }
+});
+app.put('/api/rooms/:id/sort', async (req, res) => {
+    try { await query(`UPDATE rooms SET sort_order=$1 WHERE id=$2`, [req.body.sortOrder||0, req.params.id]); res.json({ ok: true }); }
+    catch (err) { res.json({ ok: false, msg: err.message }); }
+});
+app.put('/api/rooms/reorder', async (req, res) => {
+    const { roomIds } = req.body;
+    if (!Array.isArray(roomIds)) return res.json({ ok: false, msg: "roomIds 必須是數組" });
+    try {
+        const client = pool ? await pool.connect() : null;
+        if (client) await client.query('BEGIN');
+        for (let i = 0; i < roomIds.length; i++) {
+            await query(`UPDATE rooms SET sort_order=$1 WHERE id=$2`, [i + 1, roomIds[i]]);
+        }
+        if (client) await client.query('COMMIT');
+        res.json({ ok: true });
+    } catch (err) { 
+        if (pool) await pool.query('ROLLBACK');
+        res.json({ ok: false, msg: err.message }); 
+    }
 });
 app.delete('/api/rooms/:id', async (req, res) => {
     try {
@@ -472,6 +513,18 @@ app.delete('/api/employee-leaves/:id', async (req, res) => {
         const r = await query(`UPDATE employee_leaves SET is_deleted=1 WHERE id=$1`, [req.params.id]);
         if (r.rowCount === 0) return res.json({ ok: false, msg: "找不到" });
         await logOp('DELETE_LEAVE', req.params.id, `刪除假期 #${req.params.id}`, req.ip);
+        res.json({ ok: true });
+    } catch (err) { res.json({ ok: false, msg: err.message }); }
+});
+
+app.put('/api/employee-leaves/:id', async (req, res) => {
+    const { employee, leaveDate, endDate, leaveType } = req.body;
+    if (!employee || !leaveDate) return res.json({ ok: false, msg: "員工姓名和日期為必填" });
+    const finalEndDate = endDate || leaveDate;
+    try {
+        const r = await query(`UPDATE employee_leaves SET employee=$1, leave_date=$2, end_date=$3, leave_type=$4 WHERE id=$5`, [employee, leaveDate, finalEndDate, leaveType || '', req.params.id]);
+        if (r.rowCount === 0) return res.json({ ok: false, msg: "找不到" });
+        await logOp('UPDATE_LEAVE', req.params.id, `更新假期: ${employee} ${leaveDate}${finalEndDate !== leaveDate ? ' ~ ' + finalEndDate : ''}`, req.ip);
         res.json({ ok: true });
     } catch (err) { res.json({ ok: false, msg: err.message }); }
 });

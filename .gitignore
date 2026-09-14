@@ -4,3 +4,4 @@ node_modules/
 booking-server/
 ~$*
 USER_MANUAL.*
+.idea/
