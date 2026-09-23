@@ -123,6 +123,13 @@ async function initDB() {
     for (const eName of defaultEmps) {
         const check = await query(`SELECT id FROM employees WHERE name = $1`, [eName]);
         if (check.rows.length === 0) await query(`INSERT INTO employees (name) VALUES ($1)`, [eName]);
+        
+        // 為每個員工創建對應的用戶帳號（如果不存在）
+        const userCheck = await query(`SELECT id FROM users WHERE username = $1`, [eName]);
+        if (userCheck.rows.length === 0) {
+            const empHash = bcrypt.hashSync('123456', 10); // 預設密碼為 123456
+            await query(`INSERT INTO users (username, password, role) VALUES ($1, $2, 'user')`, [eName, empHash]);
+        }
     }
     console.log('✅ DB 初始化完成');
 }
@@ -357,7 +364,16 @@ app.get('/api/employees', async (req, res) => {
 app.post('/api/employees', async (req, res) => {
     const { name } = req.body;
     if (!name) return res.json({ ok: false, msg: "姓名不可空白" });
-    try { const r = await query(`INSERT INTO employees (name) VALUES ($1) RETURNING id,name`, [name]); await logOp('CREATE_EMPLOYEE',null,`新增員工: ${name}`,req.ip); res.json({ ok: true, data: r.rows[0] }); }
+    try {
+        const r = await query(`INSERT INTO employees (name) VALUES ($1) RETURNING id,name`, [name]);
+        
+        // 為新員工創建對應的用戶帳號
+        const empHash = bcrypt.hashSync('123456', 10); // 預設密碼為 123456
+        await query(`INSERT INTO users (username, password, role) VALUES ($1, $2, 'user')`, [name, empHash]);
+        
+        await logOp('CREATE_EMPLOYEE',null,`新增員工: ${name}`,req.ip);
+        res.json({ ok: true, data: r.rows[0] });
+    }
     catch (err) { if (err.message.includes('unique')) return res.json({ ok: false, msg: "員工已存在" }); res.json({ ok: false, msg: err.message }); }
 });
 app.delete('/api/employees/:id', async (req, res) => {
