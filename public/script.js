@@ -9,7 +9,157 @@ const API_BASE = "/api";
 // 手機模式：僅在「寬度 <900px 且主要輸入為觸控」時啟用，Mac/Windows 桌面（滑鼠/觸控板）一律維持原樣
 const MOBILE_MODE_MQ = '(max-width: 900px) and (pointer: coarse)';
 function isMobileMode() { return window.matchMedia(MOBILE_MODE_MQ).matches; }
+
+// 登入狀態管理
+const AUTH_KEY = 'calendar_auth';
+function getAuthUser() {
+    try {
+        const auth = localStorage.getItem(AUTH_KEY);
+        return auth ? JSON.parse(auth) : null;
+    } catch(e) { return null; }
+}
+function setAuthUser(user) {
+    if (user) {
+        localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+    } else {
+        localStorage.removeItem(AUTH_KEY);
+    }
+}
+function isLoggedIn() {
+    return !!getAuthUser();
+}
+function requireLogin() {
+    if (!isLoggedIn()) {
+        alert('請先登入才能進行修改操作');
+        showLoginModal();
+        return false;
+    }
+    return true;
+}
+
+// 登入相關函數
+function showLoginModal() {
+    populateLoginUsernameDropdown();
+    document.getElementById('loginModal').classList.add('active');
+    document.getElementById('loginUsername').focus();
+}
+
+function populateLoginUsernameDropdown() {
+    const select = document.getElementById('loginUsername');
+    if (!select) return;
+    
+    // 保留預設選項
+    select.innerHTML = '<option value="">請選擇員工</option>';
+    
+    // 添加員工選項
+    empList.forEach(emp => {
+        const option = document.createElement('option');
+        option.value = emp.name;
+        option.textContent = emp.name;
+        select.appendChild(option);
+    });
+}
+
+function hideLoginModal() {
+    document.getElementById('loginModal').classList.remove('active');
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
+}
+
+async function handleLogin() {
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    
+    if (!username || !password) {
+        alert('請輸入帳號和密碼');
+        return;
+    }
+    
+    try {
+        const res = await fetch(`${API_BASE}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const result = await res.json();
+        
+        if (result.ok) {
+            setAuthUser(result.data);
+            hideLoginModal();
+            updateAuthUI();
+            alert(`登入成功，歡迎 ${result.data.username}`);
+        } else {
+            alert(result.msg || '登入失敗');
+        }
+    } catch (e) {
+        alert('登入失敗：' + e.message);
+    }
+}
+
+function handleLogout() {
+    if (confirm('確定要登出嗎？')) {
+        setAuthUser(null);
+        updateAuthUI();
+        alert('已登出');
+    }
+}
+
+function updateAuthUI() {
+    const authBtn = document.getElementById('authBtn');
+    const user = getAuthUser();
+    
+    if (user) {
+        authBtn.innerHTML = '<i class="fa-solid fa-right-from-bracket"></i>';
+        authBtn.title = `登出 (${user.username})';
+        authBtn.onclick = handleLogout;
+    } else {
+        authBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i>';
+        authBtn.title = '登入';
+        authBtn.onclick = showLoginModal;
+    }
+    
+    updateReadOnlyMode();
+}
+
+function updateReadOnlyMode() {
+    const isLogged = isLoggedIn();
+    
+    // 顯示/隱藏唯讀橫幅
+    const readOnlyBanner = document.getElementById('readOnlyBanner');
+    if (readOnlyBanner) {
+        readOnlyBanner.style.display = isLogged ? 'none' : 'flex';
+    }
+    
+    // 禁用/啟用新增預約按鈕
+    const bookBtn = document.querySelector('.btn-book');
+    if (bookBtn) bookBtn.disabled = !isLogged;
+    
+    // 禁用/啟用設定按鈕
+    const settingBtn = document.getElementById('settingBtn');
+    if (settingBtn) settingBtn.disabled = !isLogged;
+    
+    // 禁用/啟用匯入按鈕
+    const importBtn = document.getElementById('importBtn');
+    if (importBtn) importBtn.disabled = !isLogged;
+    
+    // 禁用/啟用批量刪除按鈕
+    const batchDeleteBtn = document.getElementById('batchDeleteBtn');
+    if (batchDeleteBtn) batchDeleteBtn.disabled = !isLogged;
+    
+    // 禁用/啟用待辦事項按鈕
+    const todosBtn = document.getElementById('todosBtn');
+    if (todosBtn) todosBtn.disabled = !isLogged;
+    
+    // 更新詳情視窗的編輯/刪除按鈕
+    const btnEditDetail = document.getElementById('btnEditDetail');
+    const btnDeleteDetail = document.getElementById('btnDeleteDetail');
+    const btnCopyDetail = document.getElementById('btnCopyDetail');
+    if (btnEditDetail) btnEditDetail.style.display = isLogged ? 'block' : 'none';
+    if (btnDeleteDetail) btnDeleteDetail.style.display = isLogged ? 'block' : 'none';
+    if (btnCopyDetail) btnCopyDetail.style.display = isLogged ? 'block' : 'none';
+}
 async function createReservation(data) {
+  if (!requireLogin()) return null;
   const res = await fetch(`${API_BASE}/reservations`, {
     method: "POST",
     headers: {
@@ -28,6 +178,7 @@ async function createReservation(data) {
 }
 
 async function deleteReservation(id) {
+  if (!requireLogin()) return null;
   const res = await fetch(`${API_BASE}/reservations/${id}`, { method: "DELETE" });
   const result = await res.json();
   if (!result.ok) throw new Error(result.msg);
@@ -35,6 +186,7 @@ async function deleteReservation(id) {
 }
 
 async function batchDeleteByDate(dateStr) {
+  if (!requireLogin()) return null;
   const res = await fetch(`${API_BASE}/reservations/batch/date/${dateStr}`, { method: "DELETE" });
   const result = await res.json();
   if (!result.ok) throw new Error(result.msg);
@@ -42,6 +194,7 @@ async function batchDeleteByDate(dateStr) {
 }
 
 async function batchDeleteByMonth(ym) {
+  if (!requireLogin()) return null;
   const res = await fetch(`${API_BASE}/reservations/batch/month/${ym}`, { method: "DELETE" });
   const result = await res.json();
   if (!result.ok) throw new Error(result.msg);
@@ -49,6 +202,7 @@ async function batchDeleteByMonth(ym) {
 }
 
 async function updateReservation(id, data) {
+  if (!requireLogin()) return null;
   const res = await fetch(`${API_BASE}/reservations/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -391,6 +545,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (window.__CAL_BOOKING_INIT_DONE__) { console.warn('[INIT] 已初始化過，跳過重複執行'); return; }
     window.__CAL_BOOKING_INIT_DONE__ = true;
     console.log('[IMPORT] script version v20260731c (importArmed gate)');
+    
+    // 初始化登入 UI
+    updateAuthUI();
+    
+    // 登入表單事件
+    const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+    if (loginSubmitBtn) {
+        loginSubmitBtn.onclick = handleLogin;
+    }
+    
+    // 登入彈窗關閉按鈕
+    const loginModalClose = document.querySelector('#loginModal .btn-close-view');
+    if (loginModalClose) {
+        loginModalClose.onclick = hideLoginModal;
+    }
+    
     loadAllData();
     initSidebarToggle();
     renderAnnouncement();
@@ -696,6 +866,7 @@ function getFilteredData() {
     let importArmed = false;
     if(importBtn){
     importBtn.onclick = () => {
+        if (!requireLogin()) return;
         // 每次點擊匯入，清空上一次的跳過與提醒記錄
     currentImportSkipList = [];
     currentImportInfoList = [];
@@ -1019,15 +1190,9 @@ startExportBtn.onclick = () => {
     if(batchDeleteBtn){
     batchDeleteBtn.onclick = async function(){
         if (!clickGuard(batchDeleteBtn)) return;
-        const inputBinPwd = await showPasswordPrompt("請輸入管理密碼，進入批量刪除功能：");
-        if(inputBinPwd === null) return;
-        try {
-            const loginRes = await fetch(`${API_BASE}/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: inputBinPwd }) });
-            const loginData = await loginRes.json();
-            if (!loginData.ok) { alert("密碼錯誤，無法進入批量刪除"); return; }
-        } catch(e) { alert("驗證失敗：" + e.message); return; }
+        if (!requireLogin()) return;
 
-        // ===== 密碼驗證通過，執行刪除彈窗 =====
+        // ===== 執行刪除彈窗 =====
         const currentView = viewSelect.value;
         // 建立浮動彈窗
         const mask = document.createElement('div');
@@ -1122,18 +1287,9 @@ startExportBtn.onclick = () => {
     if(settingBtn){
     settingBtn.onclick = async () => {
     if (!clickGuard(settingBtn)) return;
-    const inputPwd = await showPasswordPrompt("請輸入管理密碼進入系統設定：");
-    if(inputPwd === null) return;
-    try {
-        const loginRes = await fetch(`${API_BASE}/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: inputPwd }) });
-        const loginData = await loginRes.json();
-        if (loginData.ok) {
-            settingModal.classList.add('active');
-            renderSettingLists();
-        } else {
-            alert("密碼錯誤");
-        }
-    } catch(e) { alert("驗證失敗：" + e.message); }
+    if (!requireLogin()) return;
+    settingModal.classList.add('active');
+    renderSettingLists();
 };
     }
 
@@ -1442,6 +1598,7 @@ async function loadRooms() {
     if(addRoomBtn){
     addRoomBtn.onclick = async () => {
     if (!clickGuard(addRoomBtn)) return;
+    if (!requireLogin()) return;
     const val = newRoomInput.value.trim();
     if(!val) return alert("請輸入房間名稱");
     try {
@@ -1466,6 +1623,7 @@ async function loadRooms() {
     if(addEmpBtn){
     addEmpBtn.onclick = async () => {
         if (!clickGuard(addEmpBtn)) return;
+        if (!requireLogin()) return;
         const val = newEmpInput.value.trim();
         if(!val) return alert("請輸入員工姓名");
         try {
@@ -1492,6 +1650,7 @@ async function loadRooms() {
     if (todosBtn) {
         todosBtn.onclick = async () => {
             if (!clickGuard(todosBtn)) return;
+            if (!requireLogin()) return;
             populateTodoDropdowns();
             document.getElementById('todoStartDate').value = getTodayStr();
             document.getElementById('todoEndDate').value = getTodayStr();
