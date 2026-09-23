@@ -110,7 +110,7 @@ function updateAuthUI() {
     
     if (user) {
         authBtn.innerHTML = '<i class="fa-solid fa-right-from-bracket"></i>';
-        authBtn.title = `登出 (${user.username})';
+        authBtn.title = `登出 (${user.username})`;
         authBtn.onclick = handleLogout;
     } else {
         authBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i>';
