@@ -136,7 +136,8 @@
       <button type="button" class="filter-select multi-select-btn" id="empFilterBtn" title="按員工篩選（可多選）">
         <span id="empFilterLabel">全部員工</span>
         <i class="fa-solid fa-chevron-down" style="font-size:10px;margin-left:6px;"></i>
-      </button>
+      </b
+           utton>
       <div class="multi-select-panel" id="empFilterPanel" style="display:none;">
         <label class="multi-option multi-option-all"><input type="checkbox" id="empFilterAll" checked>全部</label>
         <div id="empFilterList"></div>
@@ -187,10 +188,19 @@
     <button id="todosBtn" class="setting-btn" title="待辦事項">
         <i class="fa-solid fa-calendar-check"></i>
     </button>
+    <!-- 登入/登出按鈕 -->
+    <button id="authBtn" class="setting-btn" title="登入">
+        <i class="fa-solid fa-right-to-bracket"></i>
+    </button>
   </div>
   <!-- ✅ 新增公告橫條，放在粉紅header內部！ -->
   <div class="announcement-bar">
     <span id="announcementText"></span>
+  </div>
+  <!-- 唯讀模式提示 -->
+  <div id="readOnlyBanner" class="read-only-banner" style="display:none;">
+    <i class="fa-solid fa-lock"></i>
+    <span>唯讀模式 - 請登入以進行修改</span>
   </div>
 </div>
 
@@ -750,6 +760,31 @@
   <div id="loadingSpinner" class="loading-spinner" style="display:none;">
     <div class="spinner"></div>
     <div class="loading-text">載入中…</div>
+  </div>
+
+  <!-- 登入彈窗 -->
+  <div class="modal-overlay" id="loginModal">
+    <div class="add-event-wrapper" style="width:360px;max-width:90vw;">
+      <div class="modal-header">
+        <h3>登入系統</h3>
+        <div class="header-right">
+          <button class="btn-close-view"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div class="add-event-body">
+        <div class="input-group">
+          <label>帳號</label>
+          <select id="loginUsername">
+            <option value="">請選擇員工</option>
+          </select>
+        </div>
+        <div class="input-group">
+          <label>密碼</label>
+          <input type="password" id="loginPassword" placeholder="請輸入密碼">
+        </div>
+        <button id="loginSubmitBtn" class="btn-add-main" style="width:100%;">登入</button>
+      </div>
+    </div>
   </div>
 
   <!-- 頁尾：內部專案署名 -->
