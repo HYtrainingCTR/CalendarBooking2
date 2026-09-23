@@ -27,6 +27,23 @@ body { font-family: sans-serif; background: var(--bg-color); margin: 0; padding:
   padding: 8px 0 12px;
 }
 
+/* Read-only banner */
+.read-only-banner {
+  background: #fff3cd;
+  color: #856404;
+  padding: 8px 12px;
+  text-align: center;
+  font-size: 13px;
+  border-bottom: 1px solid #ffeeba;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.read-only-banner i {
+  font-size: 14px;
+}
+
 /* Header */
 .calendar-header { 
   display: flex; 
